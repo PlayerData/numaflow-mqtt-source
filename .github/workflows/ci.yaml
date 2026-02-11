@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test
+    uses: ./.github/workflows/test.yaml
+
+  lint:
+    name: Lint
+    uses: ./.github/workflows/lint.yaml
+
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yaml
+    secrets:
+      DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+  release:
+    name: Release
+    needs: [test, lint, build]
+    uses: ./.github/workflows/release.yaml

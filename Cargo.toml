@@ -1,0 +1,27 @@
+[package]
+name = "numaflow-mqtt-source"
+version = "0.0.1"
+edition = "2024"
+
+[lib]
+name = "numaflow_mqtt_source"
+path = "src/lib.rs"
+
+[[bin]]
+name = "numaflow-mqtt-source"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+bytes = "1"
+chrono = "0.4"
+env_logger = "0.10"
+log = "0.4"
+numaflow = "0.5.0"
+rumqttc = { version = "0.24", features = ["use-rustls"] }
+tokio = { version = "1", features = ["full"] }
+tonic = "0.14.3"
+
+[dev-dependencies]
+rumqttd = "0.20"
+toml = "0.8"
