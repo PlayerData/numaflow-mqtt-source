@@ -5,7 +5,6 @@ use rumqttc::mqttbytes::v4::Publish;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::{self, Receiver};
 
@@ -163,8 +162,8 @@ impl MqttSource {
                         }
                     }
                     Err(e) => {
-                        log::error!("MQTT connection error: {:?}. Retrying...", e);
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        log::error!("MQTT connection error: {:?}. Exiting.", e);
+                        std::process::exit(1);
                     }
                 }
             }
