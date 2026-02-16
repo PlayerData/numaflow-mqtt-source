@@ -14,13 +14,16 @@ jobs:
     name: Lint
     uses: ./.github/workflows/lint.yaml
 
-  build:
-    name: Build
-    uses: ./.github/workflows/build.yaml
-    secrets:
-      DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
-
   release:
     name: Release
-    needs: [test, lint, build]
+    needs: [test, lint]
     uses: ./.github/workflows/release.yaml
+
+  build:
+    name: Build
+    needs: [release]
+    uses: ./.github/workflows/build.yaml
+    with:
+      version: ${{ needs.release.outputs.new_release_version }}
+    secrets:
+      DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
