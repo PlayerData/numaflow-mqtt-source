@@ -1,5 +1,5 @@
 use numaflow::source::{Message, SourceReadRequest, Sourcer};
-use numaflow_mqtt_source::{MqttSource, PacketID};
+use numaflow_mqtt_source::{MqttSource, PacketID, PartitionConfig, partition_bucket};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use std::sync::Arc;
 use std::time::Duration;
@@ -100,7 +100,7 @@ async fn source_connects_and_receives_messages() {
     mqttoptions.set_keep_alive(Duration::from_secs(10));
     mqttoptions.set_clean_session(false);
 
-    let source = MqttSource::start(mqttoptions, "factory/data/sensor1".to_string());
+    let source = MqttSource::start(mqttoptions, "factory/data/sensor1".to_string(), None);
     let source = Arc::new(source);
 
     // Wait for connection and subscription
@@ -136,7 +136,7 @@ async fn ack_removes_message_from_broker_flow() {
     mqttoptions.set_keep_alive(Duration::from_secs(10));
     mqttoptions.set_clean_session(false);
 
-    let source = MqttSource::start(mqttoptions, "factory/data/ack-test".to_string());
+    let source = MqttSource::start(mqttoptions, "factory/data/ack-test".to_string(), None);
     let source = Arc::new(source);
 
     tokio::time::sleep(Duration::from_millis(800)).await;
@@ -178,7 +178,7 @@ async fn nack_removes_from_pending_without_puback() {
     mqttoptions.set_keep_alive(Duration::from_secs(10));
     mqttoptions.set_clean_session(false);
 
-    let source = MqttSource::start(mqttoptions, "factory/data/nack-test".to_string());
+    let source = MqttSource::start(mqttoptions, "factory/data/nack-test".to_string(), None);
     let source = Arc::new(source);
 
     tokio::time::sleep(Duration::from_millis(800)).await;
@@ -202,4 +202,69 @@ async fn nack_removes_from_pending_without_puback() {
     // We only verify that nack runs and that calling ack with the same offset later does not crash
     // (ack for unknown pkid is a no-op in our implementation).
     source.ack(vec![packet_id.into()]).await;
+}
+
+#[tokio::test]
+async fn partition_filter_passes_matching_topic() {
+    let _ = env_logger::try_init();
+
+    start_broker(BROKER_PORT + 3);
+
+    let topic = "factory/data/device-abc";
+    let total: u32 = 10;
+    let bucket = partition_bucket(topic, total);
+
+    let mut mqttoptions =
+        MqttOptions::new("numaflow-partition-pass-test", "127.0.0.1", BROKER_PORT + 3);
+    mqttoptions.set_keep_alive(Duration::from_secs(10));
+    mqttoptions.set_clean_session(false);
+
+    let partition = Some(PartitionConfig { total, min: bucket, max: bucket + 1 });
+    let source = Arc::new(MqttSource::start(mqttoptions, topic.to_string(), partition));
+
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let payload = b"should pass through";
+    publish_message(BROKER_PORT + 3, topic, payload).await;
+
+    let messages = read_messages(Arc::clone(&source), 1, Duration::from_secs(5))
+        .await
+        .expect("expected message to arrive");
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].value.as_slice(), payload);
+}
+
+#[tokio::test]
+async fn partition_filter_drops_excluded_topic() {
+    let _ = env_logger::try_init();
+
+    start_broker(BROKER_PORT + 4);
+
+    let topic = "factory/data/device-abc";
+    let total: u32 = 10;
+    let bucket = partition_bucket(topic, total);
+
+    // Build a range that excludes the topic's bucket.
+    let (min, max) = if bucket > 0 { (0, bucket) } else { (1, total) };
+
+    let mut mqttoptions =
+        MqttOptions::new("numaflow-partition-drop-test", "127.0.0.1", BROKER_PORT + 4);
+    mqttoptions.set_keep_alive(Duration::from_secs(10));
+    mqttoptions.set_clean_session(false);
+
+    let partition = Some(PartitionConfig { total, min, max });
+    let source = Arc::new(MqttSource::start(mqttoptions, topic.to_string(), partition));
+
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    publish_message(BROKER_PORT + 4, topic, b"should be filtered").await;
+
+    // Message must not reach Numaflow — the source must have ACKed it directly to the broker.
+    assert!(
+        read_messages(Arc::clone(&source), 1, Duration::from_millis(500))
+            .await
+            .is_err(),
+        "filtered message must not be forwarded to Numaflow"
+    );
 }

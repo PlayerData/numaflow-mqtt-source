@@ -1,5 +1,5 @@
 use anyhow::Result;
-use numaflow_mqtt_source::MqttSource;
+use numaflow_mqtt_source::{MqttSource, PartitionConfig};
 use rumqttc::{MqttOptions, TlsConfiguration, Transport};
 use std::fs;
 use std::time::Duration;
@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
 
     log::info!("MQTT options: {:?}", mqttoptions);
 
-    let source = MqttSource::start(mqttoptions, mqtt_topic);
+    let source = MqttSource::start(mqttoptions, mqtt_topic, PartitionConfig::from_env());
 
     log::info!("Starting Numaflow MQTT source");
 
