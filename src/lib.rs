@@ -1,8 +1,9 @@
 mod packet_id;
 
 use numaflow::source::{Message, Offset, SourceReadRequest, Sourcer};
-use rumqttc::mqttbytes::v4::Publish;
-use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
+use rumqttc::v5::mqttbytes::QoS;
+use rumqttc::v5::mqttbytes::v5::{Packet, Publish};
+use rumqttc::v5::{AsyncClient, Event, MqttOptions};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -77,21 +78,16 @@ impl Sourcer for MqttSource {
     }
 
     async fn nack(&self, offsets: Vec<Offset>) {
-        // Remove from pending without sending PUBACK so the broker can redeliver.
         for offset in offsets {
             let pkid = PacketID::try_from(offset).unwrap();
-
             self.pending_publishes.lock().await.remove(&pkid);
-
             log::debug!("Nacked MQTT pkid: {:?} (removed from pending)", pkid);
         }
     }
 
     async fn pending(&self) -> Option<usize> {
         let pending = Some(self.pending_publishes.lock().await.len());
-
         log::debug!("Pending: {:?}", pending);
-
         pending
     }
 
@@ -113,54 +109,60 @@ impl MqttSource {
         }
     }
 
-    pub fn start(mut mqttoptions: MqttOptions, topic: String) -> MqttSource {
+    pub fn start(
+        mut mqttoptions: MqttOptions,
+        topic: String,
+        share_group: Option<String>,
+    ) -> MqttSource {
         let (tx, rx) = mpsc::channel::<InflightMessage>(1000);
         let pending_publishes = Arc::new(Mutex::new(HashMap::new()));
 
-        // Disable auto-ack.
-        // This ensures the broker keeps the message in flight until *we* manually ack it.
         mqttoptions.set_manual_acks(true);
 
         let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
 
         let source = Self::new(rx, pending_publishes.clone(), client.clone());
 
+        let subscribe_topic = match share_group {
+            Some(group) => format!("$share/{}/{}", group, topic),
+            None => topic,
+        };
+
         tokio::spawn(async move {
-            if let Err(e) = client.subscribe(topic, QoS::AtLeastOnce).await {
+            if let Err(e) = client.subscribe(subscribe_topic, QoS::AtLeastOnce).await {
                 log::error!("Failed to subscribe: {:?}", e);
                 return;
             }
 
             loop {
                 match eventloop.poll().await {
-                    Ok(notification) => {
-                        match notification {
-                            Event::Incoming(Packet::Publish(publish)) => {
-                                let pkid: PacketID = publish.pkid.into();
-                                let topic = publish.topic.clone();
-                                let payload = publish.payload.to_vec();
+                    Ok(notification) => match notification {
+                        Event::Incoming(Packet::Publish(publish)) => {
+                            let pkid: PacketID = publish.pkid.into();
+                            let topic = std::str::from_utf8(&publish.topic)
+                                .unwrap_or("")
+                                .to_string();
+                            let payload = publish.payload.to_vec();
 
-                                log::debug!("Received MQTT message: {:?}", publish);
+                            log::debug!("Received MQTT message on topic: {:?}", topic);
 
-                                // Store Publish for later ack (rumqttc requires &Publish for ack)
-                                pending_publishes.lock().await.insert(pkid.clone(), publish);
+                            pending_publishes.lock().await.insert(pkid.clone(), publish);
 
-                                let msg = InflightMessage {
-                                    topic,
-                                    payload,
-                                    pkid,
-                                };
+                            let msg = InflightMessage {
+                                topic,
+                                payload,
+                                pkid,
+                            };
 
-                                tx.send(msg).await.unwrap();
-                            }
-                            Event::Incoming(Packet::ConnAck(_)) => {
-                                log::info!("MQTT Connected");
-                            }
-                            e => {
-                                log::debug!("MQTT event: {:?}", e);
-                            }
+                            tx.send(msg).await.unwrap();
                         }
-                    }
+                        Event::Incoming(Packet::ConnAck(_)) => {
+                            log::info!("MQTT Connected");
+                        }
+                        e => {
+                            log::debug!("MQTT event: {:?}", e);
+                        }
+                    },
                     Err(e) => {
                         log::error!("MQTT connection error: {:?}. Exiting.", e);
                         std::process::exit(1);

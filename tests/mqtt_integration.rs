@@ -1,6 +1,8 @@
 use numaflow::source::{Message, SourceReadRequest, Sourcer};
 use numaflow_mqtt_source::{MqttSource, PacketID};
-use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
+use rumqttc::v5::mqttbytes::QoS;
+use rumqttc::v5::mqttbytes::v5::Packet;
+use rumqttc::v5::{AsyncClient, Event, MqttOptions};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -19,12 +21,12 @@ max_segment_size = 104857600
 max_segment_count = 10
 initialized_filters = ["factory/data/#"]
 
-[v4.1]
-name = "v4-1"
+[v5.1]
+name = "v5-1"
 listen = "127.0.0.1:{port}"
 next_connection_delay_ms = 1
 
-[v4.1.connections]
+[v5.1.connections]
 connection_timeout_ms = 60000
 max_payload_size = 20480
 max_inflight_count = 100
@@ -42,7 +44,6 @@ fn start_broker(port: u16) {
         broker.start().expect("broker started");
     });
 
-    // Allow broker to bind and accept
     std::thread::sleep(Duration::from_millis(500));
 }
 
@@ -53,11 +54,10 @@ async fn publish_message(port: u16, topic: &str, payload: &[u8]) {
     let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
 
     client
-        .publish(topic, QoS::AtLeastOnce, false, payload)
+        .publish(topic, QoS::AtLeastOnce, false, payload.to_vec())
         .await
         .expect("publish");
 
-    // Poll event loop until broker acknowledges the publish
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
         match tokio::time::timeout(Duration::from_millis(50), eventloop.poll()).await {
@@ -98,12 +98,11 @@ async fn source_connects_and_receives_messages() {
 
     let mut mqttoptions = MqttOptions::new("numaflow-reader-test", "127.0.0.1", BROKER_PORT);
     mqttoptions.set_keep_alive(Duration::from_secs(10));
-    mqttoptions.set_clean_session(false);
+    mqttoptions.set_clean_start(false);
 
-    let source = MqttSource::start(mqttoptions, "factory/data/sensor1".to_string());
+    let source = MqttSource::start(mqttoptions, "factory/data/sensor1".to_string(), None);
     let source = Arc::new(source);
 
-    // Wait for connection and subscription
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     let topic = "factory/data/sensor1";
@@ -134,9 +133,9 @@ async fn ack_removes_message_from_broker_flow() {
 
     let mut mqttoptions = MqttOptions::new("numaflow-ack-test", "127.0.0.1", BROKER_PORT + 1);
     mqttoptions.set_keep_alive(Duration::from_secs(10));
-    mqttoptions.set_clean_session(false);
+    mqttoptions.set_clean_start(false);
 
-    let source = MqttSource::start(mqttoptions, "factory/data/ack-test".to_string());
+    let source = MqttSource::start(mqttoptions, "factory/data/ack-test".to_string(), None);
     let source = Arc::new(source);
 
     tokio::time::sleep(Duration::from_millis(800)).await;
@@ -156,11 +155,8 @@ async fn ack_removes_message_from_broker_flow() {
 
     source.ack(vec![packet_id.into()]).await;
 
-    // After ack, the message should not be redelivered. A subsequent read with no new publish
-    // should not return the same message again (we might get nothing or only future messages).
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // We should not see the same message again (no redelivery after ack)
     assert!(
         read_messages(Arc::clone(&source), 1, Duration::from_millis(100))
             .await
@@ -176,9 +172,9 @@ async fn nack_removes_from_pending_without_puback() {
 
     let mut mqttoptions = MqttOptions::new("numaflow-nack-test", "127.0.0.1", BROKER_PORT + 2);
     mqttoptions.set_keep_alive(Duration::from_secs(10));
-    mqttoptions.set_clean_session(false);
+    mqttoptions.set_clean_start(false);
 
-    let source = MqttSource::start(mqttoptions, "factory/data/nack-test".to_string());
+    let source = MqttSource::start(mqttoptions, "factory/data/nack-test".to_string(), None);
     let source = Arc::new(source);
 
     tokio::time::sleep(Duration::from_millis(800)).await;
@@ -198,8 +194,99 @@ async fn nack_removes_from_pending_without_puback() {
 
     source.nack(vec![packet_id.clone().into()]).await;
 
-    // Nack should complete without panic. The broker did not receive PUBACK, so it may redeliver.
-    // We only verify that nack runs and that calling ack with the same offset later does not crash
-    // (ack for unknown pkid is a no-op in our implementation).
     source.ack(vec![packet_id.into()]).await;
+}
+
+#[tokio::test]
+async fn shared_subscription_no_duplicate_delivery() {
+    let _ = env_logger::try_init();
+
+    start_broker(BROKER_PORT + 3);
+
+    let port = BROKER_PORT + 3;
+    let topic = "factory/data/shared-test";
+    let share_group = "numaflow-workers".to_string();
+
+    let mut opts_a = MqttOptions::new("numaflow-shared-a", "127.0.0.1", port);
+    opts_a.set_keep_alive(Duration::from_secs(10));
+    opts_a.set_clean_start(false);
+
+    let mut opts_b = MqttOptions::new("numaflow-shared-b", "127.0.0.1", port);
+    opts_b.set_keep_alive(Duration::from_secs(10));
+    opts_b.set_clean_start(false);
+
+    let source_a = Arc::new(MqttSource::start(
+        opts_a,
+        topic.to_string(),
+        Some(share_group.clone()),
+    ));
+    let source_b = Arc::new(MqttSource::start(
+        opts_b,
+        topic.to_string(),
+        Some(share_group.clone()),
+    ));
+
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let message_count = 10;
+    for i in 0..message_count {
+        publish_message(port, topic, format!("msg-{}", i).as_bytes()).await;
+    }
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let (tx_a, mut rx_a) = mpsc::channel::<Message>(message_count);
+    let (tx_b, mut rx_b) = mpsc::channel::<Message>(message_count);
+
+    let source_a_clone = Arc::clone(&source_a);
+    let source_b_clone = Arc::clone(&source_b);
+
+    let (_, _) = tokio::join!(
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            source_a_clone.read(
+                SourceReadRequest {
+                    count: message_count,
+                    timeout: Duration::from_secs(3)
+                },
+                tx_a,
+            ),
+        ),
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            source_b_clone.read(
+                SourceReadRequest {
+                    count: message_count,
+                    timeout: Duration::from_secs(3)
+                },
+                tx_b,
+            ),
+        ),
+    );
+
+    let mut from_a = Vec::new();
+    let mut from_b = Vec::new();
+    rx_a.recv_many(&mut from_a, message_count).await;
+    rx_b.recv_many(&mut from_b, message_count).await;
+
+    let total = from_a.len() + from_b.len();
+
+    assert_eq!(
+        total, message_count,
+        "shared subscription must deliver each message exactly once (got {} total, expected {})",
+        total, message_count
+    );
+
+    let mut all_payloads: Vec<Vec<u8>> = from_a
+        .iter()
+        .chain(from_b.iter())
+        .map(|m| m.value.clone())
+        .collect();
+    all_payloads.sort();
+    all_payloads.dedup();
+    assert_eq!(
+        all_payloads.len(),
+        message_count,
+        "no duplicate messages should be delivered"
+    );
 }
