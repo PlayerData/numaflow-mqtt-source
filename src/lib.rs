@@ -45,7 +45,9 @@ impl PartitionConfig {
         let Ok(total_str) = std::env::var("MQTT_PARTITION_TOTAL") else {
             return None;
         };
-        let total: u32 = total_str.parse().expect("MQTT_PARTITION_TOTAL must be a valid u32");
+        let total: u32 = total_str
+            .parse()
+            .expect("MQTT_PARTITION_TOTAL must be a valid u32");
         assert!(total > 0, "MQTT_PARTITION_TOTAL must be greater than 0");
         let min: u32 = std::env::var("MQTT_PARTITION_MIN")
             .expect("MQTT_PARTITION_MIN required when MQTT_PARTITION_TOTAL is set")
@@ -214,7 +216,11 @@ impl MqttSource {
 
                             pending_publishes.lock().await.insert(pkid.clone(), publish);
 
-                            let msg = InflightMessage { topic, payload, pkid };
+                            let msg = InflightMessage {
+                                topic,
+                                payload,
+                                pkid,
+                            };
 
                             tx.send(msg).await.unwrap();
                         }

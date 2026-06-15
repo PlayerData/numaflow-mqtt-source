@@ -219,7 +219,11 @@ async fn partition_filter_passes_matching_topic() {
     mqttoptions.set_keep_alive(Duration::from_secs(10));
     mqttoptions.set_clean_session(false);
 
-    let partition = Some(PartitionConfig { total, min: bucket, max: bucket + 1 });
+    let partition = Some(PartitionConfig {
+        total,
+        min: bucket,
+        max: bucket + 1,
+    });
     let source = Arc::new(MqttSource::start(mqttoptions, topic.to_string(), partition));
 
     tokio::time::sleep(Duration::from_millis(800)).await;
