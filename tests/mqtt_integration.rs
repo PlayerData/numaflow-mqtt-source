@@ -44,6 +44,7 @@ fn start_broker(port: u16) {
         broker.start().expect("broker started");
     });
 
+    // Allow broker to bind and accept
     std::thread::sleep(Duration::from_millis(500));
 }
 
@@ -58,6 +59,7 @@ async fn publish_message(port: u16, topic: &str, payload: &[u8]) {
         .await
         .expect("publish");
 
+    // Poll event loop until broker acknowledges the publish
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
         match tokio::time::timeout(Duration::from_millis(50), eventloop.poll()).await {
@@ -155,8 +157,11 @@ async fn ack_removes_message_from_broker_flow() {
 
     source.ack(vec![packet_id.into()]).await;
 
+    // After ack, the message should not be redelivered. A subsequent read with no new publish
+    // should not return the same message again (we might get nothing or only future messages).
     tokio::time::sleep(Duration::from_millis(200)).await;
 
+    // We should not see the same message again (no redelivery after ack)
     assert!(
         read_messages(Arc::clone(&source), 1, Duration::from_millis(100))
             .await
@@ -194,6 +199,9 @@ async fn nack_removes_from_pending_without_puback() {
 
     source.nack(vec![packet_id.clone().into()]).await;
 
+    // Nack should complete without panic. The broker did not receive PUBACK, so it may redeliver.
+    // We only verify that nack runs and that calling ack with the same offset later does not crash
+    // (ack for unknown pkid is a no-op in our implementation).
     source.ack(vec![packet_id.into()]).await;
 }
 

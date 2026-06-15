@@ -78,6 +78,7 @@ impl Sourcer for MqttSource {
     }
 
     async fn nack(&self, offsets: Vec<Offset>) {
+        // Remove from pending without sending PUBACK so the broker can redeliver.
         for offset in offsets {
             let pkid = PacketID::try_from(offset).unwrap();
             self.pending_publishes.lock().await.remove(&pkid);
@@ -117,6 +118,8 @@ impl MqttSource {
         let (tx, rx) = mpsc::channel::<InflightMessage>(1000);
         let pending_publishes = Arc::new(Mutex::new(HashMap::new()));
 
+        // Disable auto-ack.
+        // This ensures the broker keeps the message in flight until *we* manually ack it.
         mqttoptions.set_manual_acks(true);
 
         let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
@@ -146,6 +149,7 @@ impl MqttSource {
 
                             log::debug!("Received MQTT message on topic: {:?}", topic);
 
+                            // Store Publish for later ack (rumqttc requires &Publish for ack)
                             pending_publishes.lock().await.insert(pkid.clone(), publish);
 
                             let msg = InflightMessage {
