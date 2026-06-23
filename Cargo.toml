@@ -18,7 +18,7 @@ chrono = "0.4"
 env_logger = "0.11"
 log = "0.4"
 numaflow = "0.5.0"
-rumqttc = { version = "0.24", features = ["use-rustls"] }
+rumqttc = { version = "0.25", features = ["use-rustls"] }
 tokio = { version = "1", features = ["full"] }
 tonic = "0.14.3"
 
