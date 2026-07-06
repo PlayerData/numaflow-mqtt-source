@@ -1,4 +1,6 @@
 use anyhow::Result;
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Request, Response, Server};
 use numaflow_mqtt_source::MqttSource;
 use rumqttc::{MqttOptions, TlsConfiguration, Transport};
 use std::fs;
@@ -26,6 +28,14 @@ fn get_transport() -> Transport {
     })
 }
 
+async fn metrics_handler(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+    let body = numaflow_mqtt_source::metrics::gather();
+    Ok(Response::builder()
+        .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        .body(Body::from(body))
+        .unwrap())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
@@ -48,6 +58,17 @@ async fn main() -> Result<()> {
     mqttoptions.set_keep_alive(Duration::from_secs(10));
 
     log::info!("MQTT options: {:?}", mqttoptions);
+
+    let metrics_port = std::env::var("METRICS_PORT")
+        .unwrap_or_else(|_| "9090".to_string())
+        .parse::<u16>()
+        .unwrap();
+
+    let metrics_addr = ([0, 0, 0, 0], metrics_port).into();
+    let make_svc =
+        make_service_fn(|_conn| async { Ok::<_, hyper::Error>(service_fn(metrics_handler)) });
+    tokio::spawn(Server::bind(&metrics_addr).serve(make_svc));
+    log::info!("Prometheus metrics available on port {metrics_port}");
 
     let source = MqttSource::start(mqttoptions, mqtt_topic);
 

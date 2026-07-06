@@ -1,3 +1,4 @@
+pub mod metrics;
 mod packet_id;
 
 use numaflow::source::{Message, Offset, SourceReadRequest, Sourcer};
@@ -36,12 +37,13 @@ impl Sourcer for MqttSource {
         receiver.recv_many(&mut messages, request.count).await;
 
         for mqtt_msg in messages {
+            let topic = mqtt_msg.topic.clone();
+            let payload_len = mqtt_msg.payload.len();
             let offset: Offset = mqtt_msg.pkid.into();
 
-            let headers: HashMap<String, String> =
-                [("mqtt-topic".to_string(), mqtt_msg.topic.clone())]
-                    .into_iter()
-                    .collect();
+            let headers: HashMap<String, String> = [("mqtt-topic".to_string(), topic.clone())]
+                .into_iter()
+                .collect();
 
             let numa_msg = Message {
                 value: mqtt_msg.payload,
@@ -56,6 +58,11 @@ impl Sourcer for MqttSource {
                 log::error!("Failed to send to Numaflow: {:?}", e);
                 break;
             }
+
+            metrics::bytes_sent()
+                .with_label_values(&[&topic])
+                .inc_by(payload_len as f64);
+            metrics::messages_sent().with_label_values(&[&topic]).inc();
         }
     }
 
