@@ -1,6 +1,6 @@
 use numaflow::source::{Message, SourceReadRequest, Sourcer};
 use numaflow_mqtt_source::{MqttSource, PacketID};
-use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
+use rumqttc::{AsyncClient, Event, MqttOptions, Packet, PublishOptions, QoS};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -47,13 +47,13 @@ fn start_broker(port: u16) {
 }
 
 async fn publish_message(port: u16, topic: &str, payload: &[u8]) {
-    let mut mqttoptions = MqttOptions::new("test-publisher", "127.0.0.1", port);
-    mqttoptions.set_keep_alive(Duration::from_secs(5));
+    let mut mqttoptions = MqttOptions::new("test-publisher", ("127.0.0.1", port));
+    mqttoptions.set_keep_alive(5);
 
-    let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
+    let (client, mut eventloop) = AsyncClient::builder(mqttoptions).capacity(10).build();
 
     client
-        .publish(topic, QoS::AtLeastOnce, false, payload)
+        .publish(topic, payload, PublishOptions::new(QoS::AtLeastOnce))
         .await
         .expect("publish");
 
@@ -96,8 +96,8 @@ async fn source_connects_and_receives_messages() {
 
     start_broker(BROKER_PORT);
 
-    let mut mqttoptions = MqttOptions::new("numaflow-reader-test", "127.0.0.1", BROKER_PORT);
-    mqttoptions.set_keep_alive(Duration::from_secs(10));
+    let mut mqttoptions = MqttOptions::new("numaflow-reader-test", ("127.0.0.1", BROKER_PORT));
+    mqttoptions.set_keep_alive(10);
     mqttoptions.set_clean_session(false);
 
     let source = MqttSource::start(mqttoptions, "factory/data/sensor1".to_string());
@@ -132,8 +132,8 @@ async fn ack_removes_message_from_broker_flow() {
 
     start_broker(BROKER_PORT + 1);
 
-    let mut mqttoptions = MqttOptions::new("numaflow-ack-test", "127.0.0.1", BROKER_PORT + 1);
-    mqttoptions.set_keep_alive(Duration::from_secs(10));
+    let mut mqttoptions = MqttOptions::new("numaflow-ack-test", ("127.0.0.1", BROKER_PORT + 1));
+    mqttoptions.set_keep_alive(10);
     mqttoptions.set_clean_session(false);
 
     let source = MqttSource::start(mqttoptions, "factory/data/ack-test".to_string());
@@ -174,8 +174,8 @@ async fn nack_removes_from_pending_without_puback() {
 
     start_broker(BROKER_PORT + 2);
 
-    let mut mqttoptions = MqttOptions::new("numaflow-nack-test", "127.0.0.1", BROKER_PORT + 2);
-    mqttoptions.set_keep_alive(Duration::from_secs(10));
+    let mut mqttoptions = MqttOptions::new("numaflow-nack-test", ("127.0.0.1", BROKER_PORT + 2));
+    mqttoptions.set_keep_alive(10);
     mqttoptions.set_clean_session(false);
 
     let source = MqttSource::start(mqttoptions, "factory/data/nack-test".to_string());

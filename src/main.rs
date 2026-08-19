@@ -2,7 +2,6 @@ use anyhow::Result;
 use numaflow_mqtt_source::MqttSource;
 use rumqttc::{MqttOptions, TlsConfiguration, Transport};
 use std::fs;
-use std::time::Duration;
 
 fn get_transport() -> Transport {
     let mqtt_ca_cert = std::env::var("MQTT_CA_CERT");
@@ -42,10 +41,10 @@ async fn main() -> Result<()> {
 
     let transport = get_transport();
 
-    let mut mqttoptions = MqttOptions::new(id, mqtt_host, mqtt_port);
+    let mut mqttoptions = MqttOptions::new(id, (mqtt_host, mqtt_port));
 
     mqttoptions.set_transport(transport);
-    mqttoptions.set_keep_alive(Duration::from_secs(10));
+    mqttoptions.set_keep_alive(10);
 
     log::info!("MQTT options: {:?}", mqttoptions);
 
