@@ -2,7 +2,7 @@ mod packet_id;
 
 use numaflow::source::{Message, Offset, SourceReadRequest, Sourcer};
 use rumqttc::mqttbytes::v4::Publish;
-use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
+use rumqttc::{AckMode, AsyncClient, Event, MqttOptions, Packet, QoS};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -119,9 +119,9 @@ impl MqttSource {
 
         // Disable auto-ack.
         // This ensures the broker keeps the message in flight until *we* manually ack it.
-        mqttoptions.set_manual_acks(true);
+        mqttoptions.set_ack_mode(AckMode::Manual);
 
-        let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
+        let (client, mut eventloop) = AsyncClient::builder(mqttoptions).capacity(10).build();
 
         let source = Self::new(rx, pending_publishes.clone(), client.clone());
 
@@ -137,7 +137,7 @@ impl MqttSource {
                         match notification {
                             Event::Incoming(Packet::Publish(publish)) => {
                                 let pkid: PacketID = publish.pkid.into();
-                                let topic = publish.topic.clone();
+                                let topic = String::from_utf8_lossy(&publish.topic).into_owned();
                                 let payload = publish.payload.to_vec();
 
                                 log::debug!("Received MQTT message: {:?}", publish);
