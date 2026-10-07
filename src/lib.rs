@@ -1,6 +1,6 @@
 mod packet_id;
 
-use numaflow::source::{Message, Offset, SourceReadRequest, Sourcer};
+use numaflow::source::{Message, NackOffset, Offset, SourceReadRequest, Sourcer};
 use rumqttc::mqttbytes::v4::Publish;
 use rumqttc::{AckMode, AsyncClient, Event, MqttOptions, Packet, QoS};
 use std::collections::HashMap;
@@ -76,9 +76,9 @@ impl Sourcer for MqttSource {
         }
     }
 
-    async fn nack(&self, offsets: Vec<Offset>) {
+    async fn nack(&self, offsets: Vec<NackOffset>) {
         // Remove from pending without sending PUBACK so the broker can redeliver.
-        for offset in offsets {
+        for NackOffset { offset, .. } in offsets {
             let pkid = PacketID::try_from(offset).unwrap();
 
             self.pending_publishes.lock().await.remove(&pkid);
@@ -95,7 +95,7 @@ impl Sourcer for MqttSource {
         pending
     }
 
-    async fn partitions(&self) -> Option<Vec<i32>> {
+    async fn active_partitions(&self) -> Option<Vec<i32>> {
         Some(vec![0])
     }
 }

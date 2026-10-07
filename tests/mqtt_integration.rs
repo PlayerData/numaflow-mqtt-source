@@ -1,4 +1,4 @@
-use numaflow::source::{Message, SourceReadRequest, Sourcer};
+use numaflow::source::{Message, NackOffset, SourceReadRequest, Sourcer};
 use numaflow_mqtt_source::{MqttSource, PacketID};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, PublishOptions, QoS};
 use std::sync::Arc;
@@ -196,7 +196,12 @@ async fn nack_removes_from_pending_without_puback() {
     let message = messages.pop().unwrap();
     let packet_id = PacketID::try_from(message.offset).unwrap();
 
-    source.nack(vec![packet_id.clone().into()]).await;
+    source
+        .nack(vec![NackOffset {
+            offset: packet_id.clone().into(),
+            options: None,
+        }])
+        .await;
 
     // Nack should complete without panic. The broker did not receive PUBACK, so it may redeliver.
     // We only verify that nack runs and that calling ack with the same offset later does not crash
